@@ -12,19 +12,34 @@ module Resque
       }
       RESTRICTION_QUEUE_PREFIX = 'restriction'
 
-      def settings
-        @options ||= {}
+      def base_restrictions
+        @base_restrictions ||= {}
       end
 
       def restrict(options={})
-        settings.merge!(options)
+        base_restrictions.merge!(options)
+      end
+
+      # Override for dynamic restrictions based on the job arguments
+      # Note: to use dynamic restrictions, you should also implement dynamic identifiers
+      # E.g., you should use the same unique restriction_identifier per each unique
+      # set of restrictions if it matters
+      # @param [Array] _args the job args
+      def restrictions(*_args)
+        base_restrictions
+      end
+
+      # Override for dynamic identifiers (restriction grouping) based on the job arguments
+      # @param [Array] _args the job args
+      def restriction_identifier(*_args)
+        self.to_s
       end
 
       def before_perform_restriction(*args)
         return if Resque.inline?
 
         keys_decremented = []
-        settings.each do |period, number|
+        restrictions(*args).each do |period, number|
           key = redis_key(period, *args)
 
           # first try to set period key to be the total allowed for the period
@@ -54,7 +69,7 @@ module Resque
       end
 
       def after_perform_restriction(*args)
-        if settings[:concurrent]
+        if restrictions(*args)[:concurrent]
           key = redis_key(:concurrent, *args)
           Resque.redis.incrby(key, 1)
         end
@@ -74,10 +89,6 @@ module Resque
                      else period_key =~ /^per_(\d+)$/ and (Time.now.to_i / $1.to_i).to_s end
         custom_value = (custom_key && args.first && args.first.is_a?(Hash)) ? args.first[custom_key] : nil
         [RESTRICTION_QUEUE_PREFIX, self.restriction_identifier(*args), custom_value, period_str].compact.join(":")
-      end
-
-      def restriction_identifier(*args)
-        self.to_s
       end
 
       def restriction_queue_name
@@ -100,7 +111,7 @@ module Resque
       # restriction conditions have changed
       def repush(*args)
         has_restrictions = false
-        settings.each do |period, number|
+        restrictions(*args).each do |period, number|
           key = redis_key(period, *args)
           value = Resque.redis.get(key)
           has_restrictions = value && value != "" && value.to_i <= 0

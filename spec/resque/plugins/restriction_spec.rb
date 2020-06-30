@@ -40,12 +40,17 @@ RSpec.describe Resque::Plugins::Restriction do
     end
   end
 
-  context "settings" do
-    it "get correct number to restriction jobs" do
-      expect(OneDayRestrictionJob.settings).to eq({:per_day => 100})
-      expect(OneHourRestrictionJob.settings).to eq({:per_hour => 10})
-      expect(MultipleRestrictionJob.settings).to eq({:per_hour => 10, :per_300 => 2})
-      expect(MultiCallRestrictionJob.settings).to eq({:per_hour => 10, :per_300 => 2})
+  context "restrictions" do
+    it "gets correct restrictions from jobs" do
+      expect(OneDayRestrictionJob.restrictions).to eq({:per_day => 100})
+      expect(OneHourRestrictionJob.restrictions).to eq({:per_hour => 10})
+      expect(MultipleRestrictionJob.restrictions).to eq({:per_hour => 10, :per_300 => 2})
+      expect(MultiCallRestrictionJob.restrictions).to eq({:per_hour => 10, :per_300 => 2})
+    end
+
+    it "gets dynamic restrictions from jobs" do
+      expect(DynamicRestrictionJob.restrictions('custom', :per_hour => 10)).to eq({:per_minute => 5, :per_hour => 10})
+      expect(DynamicRestrictionJob.restrictions('custom', :per_minute => 1)).to eq({:per_minute => 1})
     end
   end
 
@@ -74,6 +79,18 @@ RSpec.describe Resque::Plugins::Restriction do
 
       expect(Resque.redis.get(IdentifiedRestrictionJob.redis_key(:per_hour, 1))).to eq "8"
       expect(Resque.redis.get(IdentifiedRestrictionJob.redis_key(:per_hour, 2))).to eq "9"
+    end
+
+    it "should use dynamic restrictions" do
+      result = perform_job(DynamicRestrictionJob, 1, :per_hour => 5)
+      result = perform_job(DynamicRestrictionJob, 1, :per_hour => 5)
+      result = perform_job(DynamicRestrictionJob, 2, :per_hour => 10)
+
+      expect(Resque.redis.get(DynamicRestrictionJob.redis_key(:per_hour, 1))).to eq "3"
+      expect(Resque.redis.get(DynamicRestrictionJob.redis_key(:per_hour, 2))).to eq "9"
+
+      expect(Resque.redis.get(DynamicRestrictionJob.redis_key(:per_minute, 1))).to eq "3"
+      expect(Resque.redis.get(DynamicRestrictionJob.redis_key(:per_minute, 2))).to eq "4"
     end
 
     it "should decrement execution number when one job executed" do
@@ -137,6 +154,14 @@ RSpec.describe Resque::Plugins::Restriction do
             expect(Resque.redis.ttl(MyJob.redis_key(period))).to eq -1
           end
         end
+      end
+
+      describe "per second" do
+        def period
+          :per_second
+        end
+
+        it_should_behave_like "expiration"
       end
 
       describe "per minute" do

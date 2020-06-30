@@ -38,26 +38,25 @@ module Resque
       def before_perform_restriction(*args)
         return if Resque.inline?
 
-        keys_decremented = []
+        keys_incremented = []
         restrictions(*args).each do |period, number|
           key = redis_key(period, *args)
 
           # first try to set period key to be the total allowed for the period
-          # if we get a 0 result back, the key wasn't set, so we know we are
+          # if we get false back, the key wasn't set, so we know we are
           # already tracking the count for that period'
-          period_active = ! Resque.redis.setnx(key, number.to_i - 1)
-          # If we are already tracking that period, then decrement by one to
+          period_active = ! Resque.redis.setnx(key, 1)
+          # If we are already tracking that period, then increment by one and
           # see if we are allowed to run, pushing to restriction queue to run
-          # later if not.  Note that the value stored is the number of outstanding
-          # jobs allowed, thus we need to reincrement if the decr discovers that
-          # we have bypassed the limit
+          # later if not.  Note that the value stored is the number of jobs running,
+          # thus we need to decrement if this job would exceed the limit
           if period_active
-            value = Resque.redis.decrby(key, 1).to_i
-            keys_decremented << key
-            if value < 0
+            value = Resque.redis.incrby(key, 1).to_i
+            keys_incremented << key
+            if value > number
               # reincrement the keys if one of the periods triggers DontPerform so
               # that we accurately track capacity
-              keys_decremented.each {|k| Resque.redis.incrby(k, 1) }
+              keys_incremented.each {|k| Resque.redis.incrby(k, -1) }
               Resque.push restriction_queue_name, :class => to_s, :args => args
               raise Resque::Job::DontPerform
             end
@@ -71,7 +70,7 @@ module Resque
       def after_perform_restriction(*args)
         if restrictions(*args)[:concurrent]
           key = redis_key(:concurrent, *args)
-          Resque.redis.incrby(key, 1)
+          Resque.redis.incrby(key, -1)
         end
       end
 
@@ -114,7 +113,7 @@ module Resque
         restrictions(*args).each do |period, number|
           key = redis_key(period, *args)
           value = Resque.redis.get(key)
-          has_restrictions = value && value != "" && value.to_i <= 0
+          has_restrictions = value && value != "" && value.to_i >= number
           break if has_restrictions
         end
         if has_restrictions

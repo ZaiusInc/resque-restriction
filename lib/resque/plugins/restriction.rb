@@ -104,24 +104,20 @@ module Resque
         end
       end
 
-      # if job is still restricted, push back to restriction queue, otherwise push
-      # to real queue.  Since the restrictions will be checked again when run from
-      # real queue, job will just get pushed back onto restriction queue then if
-      # restriction conditions have changed
-      def repush(*args)
-        has_restrictions = false
+      # if the job is already restricted, push to restriction queue.
+      # Otherwise Resque will attempt to run the job, but restrictions
+      # will be verified before it starts in `before_perform_restriction`
+      def repush_if_restricted(*args)
         restrictions(*args).each do |period, number|
           key = redis_key(period, *args)
           value = Resque.redis.get(key)
-          has_restrictions = value && value != "" && value.to_i >= number
-          break if has_restrictions
+          if value && value != "" && value.to_i >= number
+            # job is restricted, push to restriction queue
+            Resque.push restriction_queue_name, :class => to_s, :args => args
+            return true
+          end
         end
-        if has_restrictions
-          Resque.push restriction_queue_name, :class => to_s, :args => args
-          return true
-        else
-          return false
-        end
+        false
       end
 
       def mark_restriction_key_to_expire_for(key, period)

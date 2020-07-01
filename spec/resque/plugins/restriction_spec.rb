@@ -248,13 +248,13 @@ RSpec.describe Resque::Plugins::Restriction do
       it "should push restricted jobs onto restriction queue" do
         Resque.redis.set(OneHourRestrictionJob.redis_key(:per_hour), 10)
         expect(Resque).to receive(:push).once.with('restriction_normal', :class => 'OneHourRestrictionJob', :args => ['any args'])
-        expect(OneHourRestrictionJob.repush('any args')).to be(true)
+        expect(OneHourRestrictionJob.repush_if_restricted('any args')).to be(true)
       end
 
       it "should not push unrestricted jobs onto restriction queue" do
         Resque.redis.set(OneHourRestrictionJob.redis_key(:per_hour), 9)
         expect(Resque).not_to receive(:push)
-        expect(OneHourRestrictionJob.repush('any args')).to be(false)
+        expect(OneHourRestrictionJob.repush_if_restricted('any args')).to be(false)
       end
     end
   end

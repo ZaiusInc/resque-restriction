@@ -31,7 +31,7 @@ RSpec.describe Resque::Job do
     Resque.redis.set(OneHourRestrictionJob.redis_key(:per_hour), 11)
     3.times { Resque.push('restriction_normal', :class => 'OneHourRestrictionJob', :args => ['any args']) }
     expect(Resque.size('restriction_normal')).to eq 3
-    expect(OneHourRestrictionJob).to receive(:repush).exactly(3).times.and_return(true)
+    expect(OneHourRestrictionJob).to receive(:repush_if_restricted).exactly(3).times.and_return(true)
     Resque::Job.reserve('restriction_normal')
   end
 end

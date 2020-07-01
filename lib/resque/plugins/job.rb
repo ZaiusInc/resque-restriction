@@ -14,7 +14,7 @@ module Resque
             # and return
             payload = Resque.pop(queue)
             if payload
-              if !Object.const_get(payload['class']).repush(*payload['args'])
+              unless Object.const_get(payload['class']).repush_if_restricted(*payload['args'])
                 return new(queue, payload)
               end
             end

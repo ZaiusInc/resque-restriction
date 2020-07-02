@@ -12,6 +12,8 @@ module Resque
       }
       RESTRICTION_QUEUE_PREFIX = 'restriction'
 
+      class IsRestrictedError < StandardError; end
+
       def base_restrictions
         @base_restrictions ||= {}
       end
@@ -35,12 +37,24 @@ module Resque
         self.to_s
       end
 
+      def concurrency_limiter
+        @concurrency_limiter ||= ConcurrencyLimiter.new(Resque.redis)
+      end
+
       def before_perform_restriction(*args)
         return if Resque.inline?
 
         keys_incremented = []
+        concurrency_key = nil
         restrictions(*args).each do |period, number|
           key = redis_key(period, *args)
+
+          # check if we would exceed the concurrency limit
+          if period == :concurrent
+            raise IsRestrictedError unless concurrency_limiter.try_start(key, number)
+            concurrency_key = key
+            next
+          end
 
           # first try to set period key to be the total allowed for the period
           # if we get false back, the key wasn't set, so we know we are
@@ -53,24 +67,28 @@ module Resque
           if period_active
             value = Resque.redis.incrby(key, 1).to_i
             keys_incremented << key
-            if value > number
-              # reincrement the keys if one of the periods triggers DontPerform so
-              # that we accurately track capacity
-              keys_incremented.each {|k| Resque.redis.incrby(k, -1) }
-              Resque.push restriction_queue_name, :class => to_s, :args => args
-              raise Resque::Job::DontPerform
-            end
+            raise IsRestrictedError if value > number
           else
             # This is the first time we set the key, so we mark it to expire
             mark_restriction_key_to_expire_for(key, period)
           end
         end
+      rescue IsRestrictedError
+        # ensure we don't hold a concurrency slot
+        concurrency_limiter.finish(concurrency_key) if concurrency_key
+
+        # reincrement the keys if one of the periods triggers DontPerform so
+        # that we accurately track capacity
+        keys_incremented.each {|k| Resque.redis.incrby(k, -1) }
+
+        Resque.push restriction_queue_name, :class => to_s, :args => args
+        raise Resque::Job::DontPerform
       end
 
       def after_perform_restriction(*args)
         if restrictions(*args)[:concurrent]
           key = redis_key(:concurrent, *args)
-          Resque.redis.incrby(key, -1)
+          concurrency_limiter.finish(key)
         end
       end
 
@@ -110,14 +128,18 @@ module Resque
       def repush_if_restricted(*args)
         restrictions(*args).each do |period, number|
           key = redis_key(period, *args)
-          value = Resque.redis.get(key)
-          if value && value != "" && value.to_i >= number
-            # job is restricted, push to restriction queue
-            Resque.push restriction_queue_name, :class => to_s, :args => args
-            return true
+          if period == :concurrent
+            raise IsRestrictedError unless concurrency_limiter.can_start?(key, number)
+          else
+            value = Resque.redis.get(key)
+            raise IsRestrictedError if value && value != "" && value.to_i >= number
           end
         end
         false
+      rescue IsRestrictedError
+        # job is restricted, push to restriction queue
+        Resque.push restriction_queue_name, :class => to_s, :args => args
+        true
       end
 
       def mark_restriction_key_to_expire_for(key, period)

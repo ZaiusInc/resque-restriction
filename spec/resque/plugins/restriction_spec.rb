@@ -1,5 +1,4 @@
 require 'spec_helper'
-
 RSpec.describe Resque::Plugins::Restriction do
   it "should follow the convention" do
     Resque::Plugin.lint(Resque::Plugins::Restriction)
@@ -100,20 +99,21 @@ RSpec.describe Resque::Plugins::Restriction do
       expect(Resque.redis.get(OneHourRestrictionJob.redis_key(:per_hour))).to eq "7"
     end
 
-    it "should decrement execution number when concurrent job completes" do
+    it "should increment execution number when concurrent job completes" do
       t = Thread.new do
         perform_job(ConcurrentRestrictionJob, "any args")
       end
       sleep 0.1
-      expect(Resque.redis.get(ConcurrentRestrictionJob.redis_key(:concurrent))).to eq "1"
+      concurrency_key = ConcurrentRestrictionJob.redis_key(:concurrent)
+      expect(Resque.redis.zcard(concurrency_key)).to eq 1
       t.join
-      expect(Resque.redis.get(ConcurrentRestrictionJob.redis_key(:concurrent))).to eq "0"
+      expect(Resque.redis.zcard(concurrency_key)).to eq 0
     end
 
-    it "should decrement execution number when concurrent job fails" do
+    it "should increment execution number when concurrent job fails" do
       expect(ConcurrentRestrictionJob).to receive(:perform).and_raise("bad")
       perform_job(ConcurrentRestrictionJob, "any args") rescue nil
-      expect(Resque.redis.get(ConcurrentRestrictionJob.redis_key(:concurrent))).to eq "0"
+      expect(Resque.redis.zcard(ConcurrentRestrictionJob.redis_key(:concurrent))).to eq 0
     end
 
     it "should put the job into restriction queue when execution count > limit" do

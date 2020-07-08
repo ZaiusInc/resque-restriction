@@ -1,5 +1,4 @@
 require 'spec_helper'
-
 RSpec.describe Resque::Plugins::Restriction do
   it "should follow the convention" do
     Resque::Plugin.lint(Resque::Plugins::Restriction)
@@ -40,12 +39,17 @@ RSpec.describe Resque::Plugins::Restriction do
     end
   end
 
-  context "settings" do
-    it "get correct number to restriction jobs" do
-      expect(OneDayRestrictionJob.settings).to eq({:per_day => 100})
-      expect(OneHourRestrictionJob.settings).to eq({:per_hour => 10})
-      expect(MultipleRestrictionJob.settings).to eq({:per_hour => 10, :per_300 => 2})
-      expect(MultiCallRestrictionJob.settings).to eq({:per_hour => 10, :per_300 => 2})
+  context "restrictions" do
+    it "gets correct restrictions from jobs" do
+      expect(OneDayRestrictionJob.restrictions).to eq({:per_day => 100})
+      expect(OneHourRestrictionJob.restrictions).to eq({:per_hour => 10})
+      expect(MultipleRestrictionJob.restrictions).to eq({:per_hour => 10, :per_300 => 2})
+      expect(MultiCallRestrictionJob.restrictions).to eq({:per_hour => 10, :per_300 => 2})
+    end
+
+    it "gets dynamic restrictions from jobs" do
+      expect(DynamicRestrictionJob.restrictions('custom', :per_hour => 10)).to eq({:per_minute => 5, :per_hour => 10})
+      expect(DynamicRestrictionJob.restrictions('custom', :per_minute => 1)).to eq({:per_minute => 1})
     end
   end
 
@@ -62,9 +66,9 @@ RSpec.describe Resque::Plugins::Restriction do
       Resque.redis.flushall
     end
 
-    it "should set execution number and decrement it when one job first executed" do
+    it "should set execution number and increment it when one job first executed" do
       result = perform_job(OneHourRestrictionJob, "any args")
-      expect(Resque.redis.get(OneHourRestrictionJob.redis_key(:per_hour))).to eq "9"
+      expect(Resque.redis.get(OneHourRestrictionJob.redis_key(:per_hour))).to eq "1"
     end
 
     it "should use restriction_identifier to set exclusive execution counts" do
@@ -72,15 +76,27 @@ RSpec.describe Resque::Plugins::Restriction do
       result = perform_job(IdentifiedRestrictionJob, 1)
       result = perform_job(IdentifiedRestrictionJob, 2)
 
-      expect(Resque.redis.get(IdentifiedRestrictionJob.redis_key(:per_hour, 1))).to eq "8"
-      expect(Resque.redis.get(IdentifiedRestrictionJob.redis_key(:per_hour, 2))).to eq "9"
+      expect(Resque.redis.get(IdentifiedRestrictionJob.redis_key(:per_hour, 1))).to eq "2"
+      expect(Resque.redis.get(IdentifiedRestrictionJob.redis_key(:per_hour, 2))).to eq "1"
     end
 
-    it "should decrement execution number when one job executed" do
+    it "should use dynamic restrictions" do
+      result = perform_job(DynamicRestrictionJob, 1, :per_hour => 5)
+      result = perform_job(DynamicRestrictionJob, 1, :per_hour => 5)
+      result = perform_job(DynamicRestrictionJob, 2, :per_hour => 10)
+
+      expect(Resque.redis.get(DynamicRestrictionJob.redis_key(:per_hour, 1))).to eq "2"
+      expect(Resque.redis.get(DynamicRestrictionJob.redis_key(:per_hour, 2))).to eq "1"
+
+      expect(Resque.redis.get(DynamicRestrictionJob.redis_key(:per_minute, 1))).to eq "2"
+      expect(Resque.redis.get(DynamicRestrictionJob.redis_key(:per_minute, 2))).to eq "1"
+    end
+
+    it "should increment execution number when one job executed" do
       Resque.redis.set(OneHourRestrictionJob.redis_key(:per_hour), 6)
       result = perform_job(OneHourRestrictionJob, "any args")
 
-      expect(Resque.redis.get(OneHourRestrictionJob.redis_key(:per_hour))).to eq "5"
+      expect(Resque.redis.get(OneHourRestrictionJob.redis_key(:per_hour))).to eq "7"
     end
 
     it "should increment execution number when concurrent job completes" do
@@ -88,22 +104,23 @@ RSpec.describe Resque::Plugins::Restriction do
         perform_job(ConcurrentRestrictionJob, "any args")
       end
       sleep 0.1
-      expect(Resque.redis.get(ConcurrentRestrictionJob.redis_key(:concurrent))).to eq "0"
+      concurrency_key = ConcurrentRestrictionJob.redis_key(:concurrent)
+      expect(Resque.redis.zcard(concurrency_key)).to eq 1
       t.join
-      expect(Resque.redis.get(ConcurrentRestrictionJob.redis_key(:concurrent))).to eq "1"
+      expect(Resque.redis.zcard(concurrency_key)).to eq 0
     end
 
     it "should increment execution number when concurrent job fails" do
       expect(ConcurrentRestrictionJob).to receive(:perform).and_raise("bad")
       perform_job(ConcurrentRestrictionJob, "any args") rescue nil
-      expect(Resque.redis.get(ConcurrentRestrictionJob.redis_key(:concurrent))).to eq "1"
+      expect(Resque.redis.zcard(ConcurrentRestrictionJob.redis_key(:concurrent))).to eq 0
     end
 
-    it "should put the job into restriction queue when execution count < 0" do
-      Resque.redis.set(OneHourRestrictionJob.redis_key(:per_hour), 0)
+    it "should put the job into restriction queue when execution count > limit" do
+      Resque.redis.set(OneHourRestrictionJob.redis_key(:per_hour), 10)
       result = perform_job(OneHourRestrictionJob, "any args")
       # expect(result).to_not be(true)
-      expect(Resque.redis.get(OneHourRestrictionJob.redis_key(:per_hour))).to eq "0"
+      expect(Resque.redis.get(OneHourRestrictionJob.redis_key(:per_hour))).to eq "10"
       expect(Resque.redis.lrange("queue:restriction_normal", 0, -1)).to eq [Resque.encode(:class => "OneHourRestrictionJob", :args => ["any args"])]
     end
 
@@ -137,6 +154,14 @@ RSpec.describe Resque::Plugins::Restriction do
             expect(Resque.redis.ttl(MyJob.redis_key(period))).to eq -1
           end
         end
+      end
+
+      describe "per second" do
+        def period
+          :per_second
+        end
+
+        it_should_behave_like "expiration"
       end
 
       describe "per minute" do
@@ -199,37 +224,37 @@ RSpec.describe Resque::Plugins::Restriction do
     context "multiple restrict" do
       it "should restrict per_minute" do
         result = perform_job(MultipleRestrictionJob, "any args")
-        expect(Resque.redis.get(MultipleRestrictionJob.redis_key(:per_hour))).to eq "9"
+        expect(Resque.redis.get(MultipleRestrictionJob.redis_key(:per_hour))).to eq "1"
         expect(Resque.redis.get(MultipleRestrictionJob.redis_key(:per_300))).to eq "1"
         result = perform_job(MultipleRestrictionJob, "any args")
         result = perform_job(MultipleRestrictionJob, "any args")
-        expect(Resque.redis.get(MultipleRestrictionJob.redis_key(:per_hour))).to eq "8"
-        expect(Resque.redis.get(MultipleRestrictionJob.redis_key(:per_300))).to eq "0"
+        expect(Resque.redis.get(MultipleRestrictionJob.redis_key(:per_hour))).to eq "2"
+        expect(Resque.redis.get(MultipleRestrictionJob.redis_key(:per_300))).to eq "2"
       end
 
       it "should restrict per_hour" do
-        Resque.redis.set(MultipleRestrictionJob.redis_key(:per_hour), 1)
-        Resque.redis.set(MultipleRestrictionJob.redis_key(:per_300), 2)
+        Resque.redis.set(MultipleRestrictionJob.redis_key(:per_hour), 9)
+        Resque.redis.set(MultipleRestrictionJob.redis_key(:per_300), 0)
         result = perform_job(MultipleRestrictionJob, "any args")
-        expect(Resque.redis.get(MultipleRestrictionJob.redis_key(:per_hour))).to eq "0"
+        expect(Resque.redis.get(MultipleRestrictionJob.redis_key(:per_hour))).to eq "10"
         expect(Resque.redis.get(MultipleRestrictionJob.redis_key(:per_300))).to eq "1"
         result = perform_job(MultipleRestrictionJob, "any args")
-        expect(Resque.redis.get(MultipleRestrictionJob.redis_key(:per_hour))).to eq "0"
+        expect(Resque.redis.get(MultipleRestrictionJob.redis_key(:per_hour))).to eq "10"
         expect(Resque.redis.get(MultipleRestrictionJob.redis_key(:per_300))).to eq "1"
       end
     end
 
     context "repush" do
       it "should push restricted jobs onto restriction queue" do
-        Resque.redis.set(OneHourRestrictionJob.redis_key(:per_hour), -1)
+        Resque.redis.set(OneHourRestrictionJob.redis_key(:per_hour), 10)
         expect(Resque).to receive(:push).once.with('restriction_normal', :class => 'OneHourRestrictionJob', :args => ['any args'])
-        expect(OneHourRestrictionJob.repush('any args')).to be(true)
+        expect(OneHourRestrictionJob.repush_if_restricted('any args')).to be(true)
       end
 
       it "should not push unrestricted jobs onto restriction queue" do
-        Resque.redis.set(OneHourRestrictionJob.redis_key(:per_hour), 1)
+        Resque.redis.set(OneHourRestrictionJob.redis_key(:per_hour), 9)
         expect(Resque).not_to receive(:push)
-        expect(OneHourRestrictionJob.repush('any args')).to be(false)
+        expect(OneHourRestrictionJob.repush_if_restricted('any args')).to be(false)
       end
     end
   end

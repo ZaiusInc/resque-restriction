@@ -134,3 +134,22 @@ class MultiCallRestrictionJob
   def self.perform(*args)
   end
 end
+
+class DynamicRestrictionJob
+  extend Resque::Plugins::Restriction
+
+  restrict :per_minute => 5
+
+  @queue = 'normal'
+
+  def self.restrictions(*args)
+    base_restrictions.merge(args[1])
+  end
+
+  def self.restriction_identifier(*args)
+    [self.to_s, args[0]].join(':')
+  end
+
+  def self.perform(*args)
+  end
+end

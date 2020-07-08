@@ -77,11 +77,11 @@ module Resque
         # ensure we don't hold a concurrency slot
         concurrency_limiter.finish(concurrency_key) if concurrency_key
 
-        # reincrement the keys if one of the periods triggers DontPerform so
-        # that we accurately track capacity
-        keys_incremented.each {|k| Resque.redis.incrby(k, -1) }
+        # decrement the keys we incremented since we're not going to perform the job
+        # so we accurately track capacity
+        keys_incremented.each { |k| Resque.redis.incrby(k, -1) }
 
-        Resque.push restriction_queue_name, :class => to_s, :args => args
+        Resque.push(restriction_queue_name, class: to_s, args: args)
         raise Resque::Job::DontPerform
       end
 
@@ -138,7 +138,7 @@ module Resque
         false
       rescue IsRestrictedError
         # job is restricted, push to restriction queue
-        Resque.push restriction_queue_name, :class => to_s, :args => args
+        Resque.push(restriction_queue_name, class: to_s, args: args)
         true
       end
 

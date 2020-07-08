@@ -90,7 +90,7 @@ module Resque
 
           # mock time so we can time-travel
           mock_time = 1593719580
-          allow(Time).to receive(:now) { mock_time }
+          allow(Time).to receive(:now) { Time.at(mock_time) }
           ConcurrencyLimiter.const_set(:CONCURRENT_HEARTBEAT, 0) # fast-forward heartbeat
 
           expect(limiter.try_start(KEY, 1)).to be_truthy
@@ -111,7 +111,7 @@ module Resque
 
           # mock time so we can time-travel
           mock_time = 1593719580
-          allow(Time).to receive(:now) { mock_time }
+          allow(Time).to receive(:now) { Time.at(mock_time) }
           # engage infinite improbability drive (make this the 1 in a hundred chance every time)
           allow_any_instance_of(Object).to receive(:rand).and_return(0)
 

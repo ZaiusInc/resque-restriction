@@ -67,9 +67,7 @@ module Resque
             perform_maintenance(key) if rand(100).zero?
             loop do
               sleep(CONCURRENT_HEARTBEAT)
-              @redis.pipelined do
-                @redis.zadd(key, Time.now.to_i, @job_id, xx: true)
-              end
+              @redis.zadd(key, Time.now.to_i, @job_id, xx: true)
             end
           end
         end

@@ -9,10 +9,14 @@ module Resque
     end
 
     class Config
-      attr_accessor :max_queue_peek
+      attr_writer :max_queue_peek
 
       def initialize
         @max_queue_peek = 100
+      end
+
+      def max_queue_peek(queue)
+        @max_queue_peek.respond_to?(:call) ? @max_queue_peek.call(queue) : @max_queue_peek
       end
     end
   end

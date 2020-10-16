@@ -66,7 +66,7 @@ module Resque
           # thus we need to decrement if this job would exceed the limit
           if period_active
             value = Resque.redis.incrby(key, 1).to_i
-            keys_incremented << key
+            keys_incremented << [key, period]
             raise IsRestrictedError if value > number
           else
             # This is the first time we set the key, so we mark it to expire
@@ -79,7 +79,14 @@ module Resque
 
         # decrement the keys we incremented since we're not going to perform the job
         # so we accurately track capacity
-        keys_incremented.each { |k| Resque.redis.incrby(k, -1) }
+        Resque.redis.pipelined do
+          keys_incremented.each do |(k, period)|
+            Resque.redis.incrby(k, -1)
+            # There is an edge case where the key could have expired since we incremented it.
+            # By setting the TTL again, we ensure we won't leave any keys behind
+            mark_restriction_key_to_expire_for(k, period)
+          end
+        end
 
         Resque.push(restriction_queue_name, class: to_s, args: args)
         raise Resque::Job::DontPerform

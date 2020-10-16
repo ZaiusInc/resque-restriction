@@ -113,7 +113,7 @@ module Resque
           mock_time = 1593719580
           allow(Time).to receive(:now) { Time.at(mock_time) }
           # engage infinite improbability drive (make this the 1 in a hundred chance every time)
-          allow_any_instance_of(Object).to receive(:rand).and_return(0)
+          allow(limiter).to receive(:rand).and_return(0)
 
           # insert a stale member
           Resque.redis.zadd(KEY, 0, mock_time - 76)
